@@ -2,16 +2,29 @@
 #include <ArduinoJson.h>
 #include <HX711_ADC.h>
 #include <WiFi.h>
+#include <time.h>
 
-#define WIFI_SSID "virusX"
-#define WIFI_PASSWORD "simacmacmagbabayad"
-#define FIREBASE_HOST "https://petness-92c55-default-rtdb.asia-southeast1.firebasedatabase.app/" // Replace with your Firebase Realtime Database
-#define FIREBASE_AUTH "bhvzGLuvbjReHlQjk77UwWGtCVdBBUBABE3X4PQ2"                                 // Replace with your Firebase Database secret
+using namespace std;
 
+// Definitions for WiFi
+const char *WIFI_SSID = "virusX";
+const char *WIFI_PASSWORD = "simacmacmagbabayad";
+
+// Definitions for Firebase
+const char *FIREBASE_HOST = "https://petness-92c55-default-rtdb.asia-southeast1.firebasedatabase.app/"; // Replace with your Firebase Realtime Database URL
+const char *FIREBASE_AUTH = "bhvzGLuvbjReHlQjk77UwWGtCVdBBUBABE3X4PQ2";                                 // Replace with your Firebase Database secret
+
+// Definitions for NTP
+const char *NTP_SERVER = "0.asia.pool.ntp.org";
+const long GMT_OFFSET_SEC = 28800;
+const int DAYLIGHT_OFFSET_SEC = 0;
+
+// Definitions for HX711
 const int HX711_dout = 13;
 const int HX711_sck = 27;
 HX711_ADC LoadCell(HX711_dout, HX711_sck);
 
+// Declare the FirebaseData objects at the global scope
 FirebaseData fbdo1;
 FirebaseData fbdo2;
 FirebaseConfig config;
@@ -142,7 +155,7 @@ void petWeightStream()
     else if (fbdo1.dataType() == "boolean")
     {
       bool status = fbdo1.boolData();
-      Serial.print("Status: ");
+      Serial.print("Status of Weight Stream: ");
       Serial.println(String(status).c_str());
       if (status)
       {
@@ -157,9 +170,134 @@ void petWeightStream()
   }
 }
 
+String getCurrentDate()
+{
+  time_t now;
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo))
+  {
+    Serial.println("Failed to obtain Current Date");
+    return "";
+  }
+  char dateStr[11]; // "YYYY-MM-DD\0"
+  strftime(dateStr, sizeof(dateStr), "%Y-%m-%d", &timeinfo);
+  return String(dateStr);
+}
+
+String getCurrentTime()
+{
+  time_t now;
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo))
+  {
+    Serial.println("Failed to obtain Hour & Minute time");
+    return "";
+  }
+  char timeStr[6]; // "HH:MM\0"
+  strftime(timeStr, sizeof(timeStr), "%H:%M", &timeinfo);
+  return String(timeStr);
+}
+
+int getCurrentHour()
+{
+  struct tm timeinfo;
+  int retries = 10;
+  while (!getLocalTime(&timeinfo))
+  {
+    Serial.println("Failed to obtain time, retrying...");
+    delay(1000); // wait for a second
+    retries--;
+    if (retries == 0)
+    {
+      Serial.println("Failed to obtain time");
+      return -1;
+    }
+  }
+  return timeinfo.tm_hour;
+}
+
+void smartDispenseFood(float totalAmount, int servings)
+{
+  // Calculate the amount per serving
+  float amountPerServing = totalAmount / servings;
+
+  // Get the current time
+  int currentHour = getCurrentHour();
+
+  // Determine when to dispense the food based on the number of servings
+  switch (servings)
+  {
+  case 1:
+    if (currentHour == 12)
+    {
+      Serial.print("Dispensing ");
+      Serial.print(amountPerServing);
+      Serial.println(" at 12pm");
+    }
+    else
+    {
+      Serial.print("Current Hour: ");
+      Serial.println(currentHour);
+    }
+    break;
+  case 2:
+    if (currentHour == 12 || currentHour == 18)
+    {
+      Serial.print("Dispensing ");
+      Serial.print(amountPerServing);
+      Serial.print(" at ");
+      Serial.print(currentHour);
+      Serial.println("pm");
+    }
+    else
+    {
+      Serial.print("Current Hour: ");
+      Serial.println(currentHour);
+    }
+    break;
+  case 3:
+    if (currentHour == 8 || currentHour == 15 || currentHour == 20)
+    {
+      Serial.print("Dispensing ");
+      Serial.print(amountPerServing);
+      Serial.print(" at ");
+      Serial.print(currentHour);
+      Serial.println("pm");
+    }
+    else
+    {
+      Serial.print("Current Hour: ");
+      Serial.println(currentHour);
+    }
+    break;
+  default:
+    Serial.println("Invalid number of servings");
+    break;
+  }
+}
+
+void scheduledDispenseFood(String amountToDispense, String scheduledDate, String scheduledTime)
+{
+  // Convert amountToDispense to float
+  float amount = amountToDispense.toFloat();
+
+  // Get the current date and time
+  String currentDate = getCurrentDate(); // You need to implement this function
+  String currentTime = getCurrentTime(); // You need to implement this function
+
+  // Check if it's the scheduled date and time
+  if (currentDate == scheduledDate && currentTime == scheduledTime)
+  {
+    Serial.print("Dispensing ");
+    Serial.print(amount);
+    Serial.print(" at ");
+    Serial.print(scheduledDate);
+    Serial.println(scheduledTime);
+  }
+}
+
 void amountToDispenseStream()
 {
-
   // Start Read Stream for the path petFeedingSchedule
   if (Firebase.readStream(fbdo2))
   {
@@ -181,6 +319,7 @@ void amountToDispenseStream()
         String userName = kv.key().c_str();
         JsonObject userObject = kv.value().as<JsonObject>();
 
+        // FOR SMART FEEDING
         // Check if "smartFeeding" path exists
         if (userObject.containsKey("smartFeeding"))
         {
@@ -193,41 +332,87 @@ void amountToDispenseStream()
             String arrayKey = kv2.key().c_str();
             JsonObject arrayObject = kv2.value().as<JsonObject>();
 
-            // Check the value of "amountToDispensePerServingPerDay" in the object
-            if (arrayObject.containsKey("amountToDispensePerServingPerDay"))
+            // Check the value of "amountToDispensePerServingPerDay", "servings", and "feedingStatus" in the object
+            if (arrayObject.containsKey("amountToDispensePerServingPerDay") && arrayObject.containsKey("servings") && arrayObject.containsKey("feedingStatus"))
             {
-              String value = arrayObject["amountToDispensePerServingPerDay"].as<String>();
-              Serial.println("smartFeeding data:");
-              Serial.println(userName);
-              Serial.println(value);
+              bool feedingStatus = arrayObject["feedingStatus"].as<bool>();
+
+              // Debug print statement
+              Serial.print("Feeding status for user ");
+              Serial.print(userName);
+              Serial.print(" is ");
+              Serial.println(feedingStatus ? "true" : "false");
+
+              if (feedingStatus)
+              {
+                String totalAmountString = arrayObject["amountToDispensePerServingPerDay"].as<String>();
+                int servings = arrayObject["servings"].as<int>();
+                float totalAmount = totalAmountString.toFloat();
+
+                Serial.println("smartFeeding data:");
+                Serial.println(userName);
+                Serial.println(totalAmount);
+
+                // Pass the amountPerServing to the dispensing mechanism
+                smartDispenseFood(totalAmount, servings);
+              }
             }
           }
-        }
 
-        // Check if "scheduledFeeding" path exists
-        if (userObject.containsKey("scheduledFeeding"))
-        {
-          // Get the array under "scheduledFeeding"
-          JsonObject scheduledFeedingObject = userObject["scheduledFeeding"].as<JsonObject>();
-
-          // Traverse the array
-          for (JsonPair kv2 : scheduledFeedingObject)
+          // FOR SCHEUDLED FEEDING
+          // Check if "scheduledFeeding" path exists
+          if (userObject.containsKey("scheduledFeeding"))
           {
-            String arrayKey = kv2.key().c_str();
-            JsonObject arrayObject = kv2.value().as<JsonObject>();
+            // Get the array under "scheduledFeeding"
+            JsonObject scheduledFeedingObject = userObject["scheduledFeeding"].as<JsonObject>();
 
-            // Check the value of "amountToDispensePerServingPerDay" in the object
-            if (arrayObject.containsKey("amountToDispensePerServingPerDay"))
+            // Traverse the array
+            for (JsonPair kv2 : scheduledFeedingObject)
             {
-              String value = arrayObject["amountToDispensePerServingPerDay"].as<String>();
-              Serial.println("scheduledFeeding data:");
-              Serial.println(userName);
-              Serial.println(value);
+              String arrayKey = kv2.key().c_str();
+              JsonObject arrayObject = kv2.value().as<JsonObject>();
+
+              // Check the value of "feedingStatus" in the object
+              if (arrayObject.containsKey("feedingStatus"))
+              {
+                bool feedingStatus = arrayObject["feedingStatus"].as<bool>();
+                if (feedingStatus)
+                {
+                  // Check the value of "amountToDispensePerServingPerDay" in the object
+                  if (arrayObject.containsKey("amountToDispensePerServingPerDay"))
+                  {
+                    String amountToDispense = arrayObject["amountToDispensePerServingPerDay"].as<String>();
+                    Serial.println("Amount to dispense per serving per day:");
+                    Serial.println(amountToDispense);
+                  }
+
+                  // Check the value of "scheduledDate" in the object
+                  if (arrayObject.containsKey("scheduledDate"))
+                  {
+                    String scheduledDate = arrayObject["scheduledDate"].as<String>();
+                    Serial.println("Scheduled date:");
+                    Serial.println(scheduledDate);
+                  }
+
+                  // Check the value of "scheduledTime" in the object
+                  if (arrayObject.containsKey("scheduledTime"))
+                  {
+                    String scheduledTime = arrayObject["scheduledTime"].as<String>();
+                    Serial.println("Scheduled time:");
+                    Serial.println(scheduledTime);
+                  }
+                }
+              }
             }
           }
         }
       }
     }
+  }
+  else
+  {
+    Serial.print("Failed to read stream, reason: ");
+    Serial.println(fbdo2.errorReason());
   }
 }
 
@@ -247,6 +432,9 @@ void setup()
   config.host = FIREBASE_HOST;
   config.signer.tokens.legacy_token = FIREBASE_AUTH; // Set your Firebase RTDB secret here
   Firebase.begin(&config, &auth);
+
+  // Init and get the time
+  configTime(GMT_OFFSET_SEC, DAYLIGHT_OFFSET_SEC, NTP_SERVER);
 
   // Call the function to tare the load cell
   petWeightTare();
