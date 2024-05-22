@@ -7,15 +7,15 @@
 using namespace std;
 
 // Definitions for WiFi
-const char *WIFI_SSID = "virusX";
-const char *WIFI_PASSWORD = "simacmacmagbabayad";
+const char *WIFI_SSID = "WIFIWIFIWIFI";
+const char *WIFI_PASSWORD = "LorJun21";
 
 // Definitions for Firebase
 const char *FIREBASE_HOST = "https://petness-92c55-default-rtdb.asia-southeast1.firebasedatabase.app/"; // Replace with your Firebase Realtime Database URL
 const char *FIREBASE_AUTH = "bhvzGLuvbjReHlQjk77UwWGtCVdBBUBABE3X4PQ2";                                 // Replace with your Firebase Database secret
 
 // Definitions for NTP
-const char *NTP_SERVER = "0.asia.pool.ntp.org";
+const char *NTP_SERVER = "2.asia.pool.ntp.org";
 const long GMT_OFFSET_SEC = 28800;
 const int DAYLIGHT_OFFSET_SEC = 0;
 
@@ -47,7 +47,7 @@ void petWeightTare()
   }
   else
   {
-    LoadCell.setCalFactor(395); // calibration value, you should get this from calibration sketch
+    LoadCell.setCalFactor(-20.84); // calibration value, you should get this from calibration sketch
     Serial.println("Startup + tare is complete");
   }
 }
@@ -218,6 +218,7 @@ int getCurrentHour()
 
 void smartDispenseFood(float totalAmount, int servings)
 {
+  Serial.println("smartDispenseFood function called");
   // Calculate the amount per serving
   float amountPerServing = totalAmount / servings;
 
@@ -276,15 +277,15 @@ void smartDispenseFood(float totalAmount, int servings)
   }
 }
 
-void scheduledDispenseFood(String amountToDispense, String scheduledDate, String scheduledTime)
+void scheduledDispenseFood(float amountToDispense, String scheduledDate, String scheduledTime)
 {
+  Serial.println("scheduledDispenseFood function called");
   // Convert amountToDispense to float
-  float amount = amountToDispense.toFloat();
+  float amount = amountToDispense;
 
   // Get the current date and time
   String currentDate = getCurrentDate(); // You need to implement this function
   String currentTime = getCurrentTime(); // You need to implement this function
-
   // Check if it's the scheduled date and time
   if (currentDate == scheduledDate && currentTime == scheduledTime)
   {
@@ -294,125 +295,85 @@ void scheduledDispenseFood(String amountToDispense, String scheduledDate, String
     Serial.print(scheduledDate);
     Serial.println(scheduledTime);
   }
+  else
+  {
+    Serial.println("Not the scheduled date and time");
+  }
 }
 
-void amountToDispenseStream()
+void feedingStream()
 {
-  // Start Read Stream for the path petFeedingSchedule
-  if (Firebase.readStream(fbdo2))
+  FirebaseData fbdo2;
+
+  if (!Firebase.get(fbdo2, pathAmountToDispense))
   {
-    if (fbdo2.streamTimeout())
-    {
-      Serial.println("Stream timeout, no data received from Firebase");
-    }
-    else if (fbdo2.dataType() == "json")
-    {
-      FirebaseJson *json = fbdo2.jsonObjectPtr();
-      String jsonString;
-      json->toString(jsonString);
+    Serial.print("Failed to get data, reason: ");
+    Serial.println(fbdo2.errorReason());
+    return;
+  }
 
-      DynamicJsonDocument doc(1024);
-      deserializeJson(doc, jsonString);
+  if (fbdo2.dataType() == "json")
+  {
+    FirebaseJson *json = fbdo2.jsonObjectPtr();
+    String jsonString;
+    json->toString(jsonString);
 
-      for (JsonPair kv : doc.as<JsonObject>())
+    DynamicJsonDocument doc(1024);
+    deserializeJson(doc, jsonString);
+
+    for (JsonPair kv : doc.as<JsonObject>())
+    {
+      String userName = kv.key().c_str();
+      JsonObject userObject = kv.value().as<JsonObject>();
+
+      // FOR SMART FEEDING
+      if (userObject.containsKey("smartFeeding"))
       {
-        String userName = kv.key().c_str();
-        JsonObject userObject = kv.value().as<JsonObject>();
+        JsonObject smartFeedingObject = userObject["smartFeeding"].as<JsonObject>();
+        bool smartFeedingStatus = smartFeedingObject["smartFeedingStatus"].as<bool>();
 
-        // FOR SMART FEEDING
-        // Check if "smartFeeding" path exists
-        if (userObject.containsKey("smartFeeding"))
+        if (smartFeedingStatus)
         {
-          // Get the array under "smartFeeding"
-          JsonObject smartFeedingObject = userObject["smartFeeding"].as<JsonObject>();
-
-          // Traverse the array
           for (JsonPair kv2 : smartFeedingObject)
           {
-            String arrayKey = kv2.key().c_str();
-            JsonObject arrayObject = kv2.value().as<JsonObject>();
-
-            // Check the value of "amountToDispensePerServingPerDay", "servings", and "feedingStatus" in the object
-            if (arrayObject.containsKey("amountToDispensePerServingPerDay") && arrayObject.containsKey("servings") && arrayObject.containsKey("feedingStatus"))
+            if (kv2.value().is<JsonObject>())
             {
-              bool feedingStatus = arrayObject["feedingStatus"].as<bool>();
+              JsonObject arrayObject = kv2.value().as<JsonObject>();
+              String amountToDispense = arrayObject["amountToDispensePerServingPerDay"].as<String>();
+              float totalAmount = amountToDispense.toFloat();
+              int servings = arrayObject["servings"].as<int>();
 
-              // Debug print statement
-              Serial.print("Feeding status for user ");
-              Serial.print(userName);
-              Serial.print(" is ");
-              Serial.println(feedingStatus ? "true" : "false");
-
-              if (feedingStatus)
-              {
-                String totalAmountString = arrayObject["amountToDispensePerServingPerDay"].as<String>();
-                int servings = arrayObject["servings"].as<int>();
-                float totalAmount = totalAmountString.toFloat();
-
-                Serial.println("smartFeeding data:");
-                Serial.println(userName);
-                Serial.println(totalAmount);
-
-                // Pass the amountPerServing to the dispensing mechanism
-                smartDispenseFood(totalAmount, servings);
-              }
+              // Pass the amountPerServing and servings to the dispensing mechanism
+              smartDispenseFood(totalAmount, servings);
             }
           }
+        }
+      }
 
-          // FOR SCHEUDLED FEEDING
-          // Check if "scheduledFeeding" path exists
-          if (userObject.containsKey("scheduledFeeding"))
+      // FOR SCHEDULED FEEDING
+      if (userObject.containsKey("scheduledFeeding"))
+      {
+        JsonObject scheduledFeedingObject = userObject["scheduledFeeding"].as<JsonObject>();
+        bool scheduledFeedingStatus = scheduledFeedingObject["scheduledFeedingStatus"].as<bool>();
+
+        if (scheduledFeedingStatus)
+        {
+          for (JsonPair kv2 : scheduledFeedingObject)
           {
-            // Get the array under "scheduledFeeding"
-            JsonObject scheduledFeedingObject = userObject["scheduledFeeding"].as<JsonObject>();
-
-            // Traverse the array
-            for (JsonPair kv2 : scheduledFeedingObject)
+            if (kv2.value().is<JsonObject>())
             {
-              String arrayKey = kv2.key().c_str();
               JsonObject arrayObject = kv2.value().as<JsonObject>();
+              float amountToFeed = arrayObject["amountToFeed"].as<float>();
+              String scheduledDate = arrayObject["scheduledDate"].as<String>();
+              String scheduledTime = arrayObject["scheduledTime"].as<String>();
 
-              // Check the value of "feedingStatus" in the object
-              if (arrayObject.containsKey("feedingStatus"))
-              {
-                bool feedingStatus = arrayObject["feedingStatus"].as<bool>();
-                if (feedingStatus)
-                {
-                  // Check the value of "amountToDispensePerServingPerDay" in the object
-                  if (arrayObject.containsKey("amountToDispensePerServingPerDay"))
-                  {
-                    String amountToDispense = arrayObject["amountToDispensePerServingPerDay"].as<String>();
-                    Serial.println("Amount to dispense per serving per day:");
-                    Serial.println(amountToDispense);
-                  }
-
-                  // Check the value of "scheduledDate" in the object
-                  if (arrayObject.containsKey("scheduledDate"))
-                  {
-                    String scheduledDate = arrayObject["scheduledDate"].as<String>();
-                    Serial.println("Scheduled date:");
-                    Serial.println(scheduledDate);
-                  }
-
-                  // Check the value of "scheduledTime" in the object
-                  if (arrayObject.containsKey("scheduledTime"))
-                  {
-                    String scheduledTime = arrayObject["scheduledTime"].as<String>();
-                    Serial.println("Scheduled time:");
-                    Serial.println(scheduledTime);
-                  }
-                }
-              }
+              // Pass the amountToFeed, scheduledDate, and scheduledTime to the dispensing mechanism
+              scheduledDispenseFood(amountToFeed, scheduledDate, scheduledTime);
             }
           }
         }
       }
     }
-  }
-  else
-  {
-    Serial.print("Failed to read stream, reason: ");
-    Serial.println(fbdo2.errorReason());
   }
 }
 
@@ -442,15 +403,25 @@ void setup()
   // Set up stream for getPetWeight
   Firebase.beginStream(fbdo1, pathGetPetWeight);
 
-  // Set up stream for amountToDispense
+  // Set up stream for smartFeeding
   Firebase.beginStream(fbdo2, pathAmountToDispense);
 }
+unsigned long lastPetWeightStreamTime = 0;
+unsigned long lastFeedingStreamTime = 0;
 
 void loop()
 {
+  unsigned long currentMillis = millis();
 
-  petWeightStream();
-  amountToDispenseStream();
+  if (currentMillis - lastPetWeightStreamTime >= 1000)
+  {
+    petWeightStream();
+    lastPetWeightStreamTime = currentMillis;
+  }
 
-  delay(1000);
+  if (currentMillis - lastFeedingStreamTime >= 3000)
+  {
+    feedingStream();
+    lastFeedingStreamTime = currentMillis;
+  }
 }
