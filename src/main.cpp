@@ -100,7 +100,6 @@ float samplesForGettingWeight()
       Serial.print("Load_cell output val: ");
       Serial.println(weightSample);
     }
-
     delay(500); // Delay for 1 second between samples
   }
 
@@ -141,6 +140,12 @@ void setPetWeight()
     Serial.print("Failed to update trigger status, reason: ");
     Serial.println(fbdo1.errorReason());
   }
+}
+
+float getPetWeightRecord()
+{
+  float petsWeight = samplesForGettingWeight();
+  return petsWeight;
 }
 
 void petWeightStream()
@@ -216,7 +221,164 @@ int getCurrentHour()
   return timeinfo.tm_hour;
 }
 
-void smartDispenseFood(float totalAmount, int servings)
+// void sendPetRecordsToFirebase(String userName, JsonObject &petRecords)
+// {
+//   FirebaseData fbdo;
+
+//   // Iterate over all keys in the JsonObject
+//   for (JsonPair kv : petRecords)
+//   {
+//     // Print the key and value to the serial monitor for debugging
+//     Serial.print("Key: ");
+//     Serial.println(kv.key().c_str());
+
+//     // Check the type of the value
+//     if (kv.value().is<float>())
+//     {
+//       // If the value is a float, convert it to a string
+//       Serial.print("Value: ");
+//       Serial.println(kv.value().as<float>());
+//       String value = String(kv.value().as<float>());
+
+//       // Construct the path
+//       String path = "/petFeedingSchedule/";
+//       path.concat(userName);
+//       path.concat("/petRecords/");
+//       path.concat(kv.key().c_str());
+
+//       // Send data to Firebase
+//       if (!Firebase.set(fbdo, path, value))
+//       {
+//         Serial.print("Failed to send data, reason: ");
+//         Serial.println(fbdo.errorReason());
+//         return;
+//       }
+//     }
+//     else if (kv.value().is<const char *>())
+//     {
+//       // If the value is a string, convert it to a const char *
+//       Serial.print("Value: ");
+//       Serial.println(kv.value().as<const char *>());
+
+//       // Construct the path
+//       String path = "/petFeedingSchedule/";
+//       path.concat(userName);
+//       path.concat("/petRecords/");
+//       path.concat(kv.key().c_str());
+
+//       // Send data to Firebase
+//       if (!Firebase.set(fbdo, path, String(kv.value().as<const char *>())))
+//       {
+//         Serial.print("Failed to send data, reason: ");
+//         Serial.println(fbdo.errorReason());
+//         return;
+//       }
+//     }
+//   }
+// }
+
+void sendPetRecordsToFirebase(String userName, JsonObject &petRecords)
+{
+  FirebaseData fbdo;
+
+  // Iterate over all keys in the JsonObject
+  for (JsonPair kv : petRecords)
+  {
+    // Print the key and value to the serial monitor for debugging
+    Serial.print("Key: ");
+    Serial.println(kv.key().c_str());
+
+    // Construct the path
+    String path = "/petFeedingSchedule/";
+    path.concat(userName);
+    path.concat("/petRecords/");
+    path.concat(kv.key().c_str());
+
+    // Check the type of the value and send it to Firebase
+    if (kv.value().is<float>())
+    {
+      // If the value is a float, send it directly
+      Serial.print("Value: ");
+      Serial.println(kv.value().as<float>());
+
+      if (!Firebase.set(fbdo, path, kv.value().as<float>()))
+      {
+        Serial.print("Failed to send data, reason: ");
+        Serial.println(fbdo.errorReason());
+        return;
+      }
+    }
+    else if (kv.value().is<const char *>())
+    {
+      // If the value is a string, send it directly
+      Serial.print("Value: ");
+      Serial.println(kv.value().as<const char *>());
+
+      if (!Firebase.set(fbdo, path, kv.value().as<const char *>()))
+      {
+        Serial.print("Failed to send data, reason: ");
+        Serial.println(fbdo.errorReason());
+        return;
+      }
+    }
+  }
+}
+
+void scheduledDispenseFood(String userName, float amountToDispense, String scheduledDate, String scheduledTime)
+{
+  // flag to check if the function has run
+  static bool hasRun = false;
+
+  Serial.println("scheduledDispenseFood function called");
+  // Convert amountToDispense to float
+  float amount = amountToDispense;
+
+  // Get the current date and time
+  String currentDate = getCurrentDate(); // You need to implement this function
+  String currentTime = getCurrentTime(); // You need to implement this function
+
+  // Create a JsonObject for the pet record
+  DynamicJsonDocument doc(1024);
+  JsonObject petRecord = doc.to<JsonObject>();
+
+  // Check if it's the scheduled date and time & the function has not run
+  if (currentDate == scheduledDate && currentTime == scheduledTime && !hasRun)
+  {
+    Serial.print("Dispensing ");
+    Serial.print(amount);
+    Serial.print(" at ");
+    Serial.print(scheduledDate);
+    Serial.println(scheduledTime);
+
+    // Add the dispensing date and time to the pet record
+    petRecord["weight"] = getPetWeightRecord(); // Replace getPetWeight() with the actual function or value
+    Serial.print("petRecord[\"weight\"] before sending: ");
+    Serial.println(petRecord["weight"].as<float>());
+    // Add the fields to the pet record
+    petRecord["amountDispensed"] = amountToDispense;
+
+    // Add the dispensing date and time to the pet record
+    petRecord["dispensingDate"] = currentDate;
+    petRecord["dispensingTime"] = currentTime;
+
+    // Send the pet record to Firebase
+    sendPetRecordsToFirebase(userName, petRecord);
+
+    // Set the flag to true
+    hasRun = true;
+  }
+  else if (currentDate != scheduledDate || currentTime != scheduledTime)
+  {
+    // If it's not the scheduled date and time, reset hasRun to false
+    hasRun = false;
+  }
+  else
+  {
+    Serial.println("Not the scheduled date and time");
+  }
+}
+
+void smartDispenseFood(String userName, float totalAmount, int servings)
 {
   Serial.println("smartDispenseFood function called");
   // Calculate the amount per serving
@@ -224,6 +386,10 @@ void smartDispenseFood(float totalAmount, int servings)
 
   // Get the current time
   int currentHour = getCurrentHour();
+
+  // Create a JsonObject for the pet record
+  DynamicJsonDocument doc(1024);
+  JsonObject petRecord = doc.to<JsonObject>();
 
   // Determine when to dispense the food based on the number of servings
   switch (servings)
@@ -234,6 +400,17 @@ void smartDispenseFood(float totalAmount, int servings)
       Serial.print("Dispensing ");
       Serial.print(amountPerServing);
       Serial.println(" at 12pm");
+
+      // Add the weight to the pet record
+      petRecord["weight"] = getPetWeightRecord(); // Replace getPetWeight() with the actual function or value
+      // Add the dispensing time to the pet record
+      petRecord["feedingTime"] = "12pm";
+      // Add the fields to the pet record
+      petRecord["amountDispensed"] = totalAmount;
+      petRecord["feedingFrequency"] = servings;
+
+      // Send the pet record to Firebase
+      sendPetRecordsToFirebase(userName, petRecord);
     }
     else
     {
@@ -249,6 +426,19 @@ void smartDispenseFood(float totalAmount, int servings)
       Serial.print(" at ");
       Serial.print(currentHour);
       Serial.println("pm");
+
+      // Add the weight to the pet record
+      petRecord["weight"] = getPetWeightRecord(); // Replace getPetWeight() with the actual function or value
+      // Add the fields to the pet record
+      petRecord["amountDispensed"] = totalAmount;
+      petRecord["feedingFrequency"] = servings;
+      // Add the dispensing time to the pet record
+      String dispensingTime = String(currentHour);
+      dispensingTime.concat("pm");
+      petRecord["dispensingTime"] = dispensingTime.c_str();
+
+      // Send the pet record to Firebase
+      sendPetRecordsToFirebase(userName, petRecord);
     }
     else
     {
@@ -264,6 +454,19 @@ void smartDispenseFood(float totalAmount, int servings)
       Serial.print(" at ");
       Serial.print(currentHour);
       Serial.println("pm");
+
+      // Add the weight to the pet record
+      petRecord["weight"] = getPetWeightRecord(); // Replace getPetWeight() with the actual function or value
+      // Add the fields to the pet record
+      petRecord["amountDispensed"] = totalAmount;
+      petRecord["feedingFrequency"] = servings;
+      // Add the dispensing time to the pet record
+      String dispensingTime = String(currentHour);
+      dispensingTime.concat("pm");
+      petRecord["dispensingTime"] = dispensingTime.c_str();
+
+      // Send the pet record to Firebase
+      sendPetRecordsToFirebase(userName, petRecord);
     }
     else
     {
@@ -274,30 +477,6 @@ void smartDispenseFood(float totalAmount, int servings)
   default:
     Serial.println("Invalid number of servings");
     break;
-  }
-}
-
-void scheduledDispenseFood(float amountToDispense, String scheduledDate, String scheduledTime)
-{
-  Serial.println("scheduledDispenseFood function called");
-  // Convert amountToDispense to float
-  float amount = amountToDispense;
-
-  // Get the current date and time
-  String currentDate = getCurrentDate(); // You need to implement this function
-  String currentTime = getCurrentTime(); // You need to implement this function
-  // Check if it's the scheduled date and time
-  if (currentDate == scheduledDate && currentTime == scheduledTime)
-  {
-    Serial.print("Dispensing ");
-    Serial.print(amount);
-    Serial.print(" at ");
-    Serial.print(scheduledDate);
-    Serial.println(scheduledTime);
-  }
-  else
-  {
-    Serial.println("Not the scheduled date and time");
   }
 }
 
@@ -344,7 +523,7 @@ void feedingStream()
               int servings = arrayObject["servings"].as<int>();
 
               // Pass the amountPerServing and servings to the dispensing mechanism
-              smartDispenseFood(totalAmount, servings);
+              smartDispenseFood(userName, totalAmount, servings);
             }
           }
         }
@@ -368,7 +547,7 @@ void feedingStream()
               String scheduledTime = arrayObject["scheduledTime"].as<String>();
 
               // Pass the amountToFeed, scheduledDate, and scheduledTime to the dispensing mechanism
-              scheduledDispenseFood(amountToFeed, scheduledDate, scheduledTime);
+              scheduledDispenseFood(userName, amountToFeed, scheduledDate, scheduledTime);
             }
           }
         }
